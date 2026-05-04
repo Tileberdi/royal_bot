@@ -68,11 +68,44 @@ bot.start(async (ctx) => {
   }
   await ctx.reply(T.welcome(name), {
     parse_mode: 'Markdown',
-    ...Markup.keyboard([
-      [T.btn.deposit, T.btn.withdraw],
-      [T.btn.history, T.btn.support],
-    ]).resize(),
+    ...Markup.inlineKeyboard([
+      [Markup.button.callback('⬆️ ПОПОЛНИТЬ', 'menu_deposit'), Markup.button.callback('⬇️ ВЫВОД', 'menu_withdraw')],
+      [Markup.button.callback('📜 История', 'menu_history'), Markup.button.callback('👤 Поддержка', 'menu_support')],
+    ]),
   });
+}); 
+
+bot.action('menu_deposit', async (ctx) => {
+  await ctx.answerCbQuery();
+  var check = require('../services/rateLimit').checkRateLimit;
+  var r = await check(ctx.from.id, 'deposit');
+  if (!r.allowed) return ctx.reply(r.message);
+  return ctx.scene.enter('deposit');
+});
+
+bot.action('menu_withdraw', async (ctx) => {
+  await ctx.answerCbQuery();
+  var check = require('../services/rateLimit').checkRateLimit;
+  var r = await check(ctx.from.id, 'withdrawal');
+  if (!r.allowed) return ctx.reply(r.message);
+  return ctx.scene.enter('withdrawal');
+});
+
+bot.action('menu_history', async (ctx) => {
+  await ctx.answerCbQuery();
+  var transactions = await txnService.getUserTransactions(ctx.from.id, 5);
+  if (transactions.length === 0) return ctx.reply('📜 У вас ещё нет транзакций.');
+  var statusEmoji = { pending: '⏳', processing: '🔄', completed: '✅', rejected: '❌', expired: '⏰' };
+  var typeLabel = { deposit: 'Пополнение', withdrawal: 'Вывод' };
+  var lines = transactions.map(function(t) {
+    return (statusEmoji[t.status] || '❓') + ' ' + typeLabel[t.type] + ' ' + t.amount + ' сом | ' + (t.bookmaker ? t.bookmaker.toUpperCase() : '') + ' | ' + formatDate(t.created_at);
+  });
+  await ctx.reply('📜 Последние транзакции:\n\n' + lines.join('\n'));
+});
+
+bot.action('menu_support', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply('👤 Поддержка: @maximusbos\nРаботаем 24/7! 🔥');
 });
 
 bot.command('cancel', async (ctx) => {
