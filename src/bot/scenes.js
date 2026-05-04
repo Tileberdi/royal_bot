@@ -29,7 +29,7 @@ const handleCancel = async (ctx) => {
 const depositScene = new Scenes.WizardScene(
   'deposit',
 
-  // Step 0: Show bookmaker selection
+  // Show bookmaker selection
   async (ctx) => {
     await sessionService.clearSession(ctx.from.id);
     await ctx.reply(T.selectBookmaker, bookmakersKeyboard);
