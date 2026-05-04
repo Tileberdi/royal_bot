@@ -9,9 +9,14 @@ const db = require('../db');
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const cancelKeyboard = Markup.keyboard([[T.btn.cancel]]).resize();
 
-const checkSubscription = async (ctx) => {
+var mainMenu = Markup.inlineKeyboard([
+  [Markup.button.callback('⬆️ ПОПОЛНИТЬ', 'menu_deposit'), Markup.button.callback('⬇️ ВЫВОД', 'menu_withdraw')],
+  [Markup.button.callback('📜 История', 'menu_history'), Markup.button.callback('👤 Поддержка', 'menu_support')],
+]);
+
+var checkSubscription = async function(ctx) {
   try {
-    const member = await ctx.telegram.getChatMember(process.env.REQUIRED_CHANNEL, ctx.from.id);
+    var member = await ctx.telegram.getChatMember(process.env.REQUIRED_CHANNEL, ctx.from.id);
     return ['member', 'administrator', 'creator'].includes(member.status);
   } catch (err) {
     console.error('Subscription check error:', err.message);
@@ -19,26 +24,26 @@ const checkSubscription = async (ctx) => {
   }
 };
 
-const stage = new Scenes.Stage([depositScene, withdrawalScene]);
+var stage = new Scenes.Stage([depositScene, withdrawalScene]);
 bot.use(session());
 bot.use(stage.middleware());
 
-bot.use(async (ctx, next) => {
+bot.use(async function(ctx, next) {
   if (ctx.from) {
     try {
       await txnService.upsertUser(ctx.from);
-      const blocked = await txnService.isUserBlocked(ctx.from.id);
+      var blocked = await txnService.isUserBlocked(ctx.from.id);
       if (blocked) return ctx.reply(T.userBlocked);
     } catch (err) { console.error('Middleware error:', err); }
   }
   return next();
 });
 
-bot.use(async (ctx, next) => {
+bot.use(async function(ctx, next) {
   if (ctx.message && ctx.message.text === '/start') return next();
   if (ctx.callbackQuery) return next();
   if (ctx.from) {
-    const isSubscribed = await checkSubscription(ctx);
+    var isSubscribed = await checkSubscription(ctx);
     if (!isSubscribed) {
       await ctx.reply(
         '⛔ Для использования бота необходимо подписаться на наш канал!\n\n📢 Подпишитесь и нажмите кнопку ниже:',
@@ -53,12 +58,12 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-bot.start(async (ctx) => {
-  const name = getUserName(ctx).replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
-  const isSubscribed = await checkSubscription(ctx);
+bot.start(async function(ctx) {
+  var name = getUserName(ctx).replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+  var isSubscribed = await checkSubscription(ctx);
   if (!isSubscribed) {
     await ctx.reply(
-      '👋 Привет, ' + name + '!\n\n⛔ Для использования бота необходимо подписаться на наш канал!\n\n📢 Подпишитесь и нажмите кнопку ниже:',
+      '👋 Привет, ' + name + '!\n\n⛔ Для использования бота необходимо подписаться на наш канал!',
       Markup.inlineKeyboard([
         [Markup.button.url('📢 Подписаться на канал', 'https://t.me/' + process.env.REQUIRED_CHANNEL.replace('@', ''))],
         [Markup.button.callback('✅ Я подписался', 'check_subscription')],
@@ -66,32 +71,33 @@ bot.start(async (ctx) => {
     );
     return;
   }
-  await ctx.reply(T.welcome(name), {
-    parse_mode: 'Markdown',
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback('⬆️ ПОПОЛНИТЬ', 'menu_deposit'), Markup.button.callback('⬇️ ВЫВОД', 'menu_withdraw')],
-      [Markup.button.callback('📜 История', 'menu_history'), Markup.button.callback('👤 Поддержка', 'menu_support')],
-    ]),
-  });
-}); 
+  await ctx.reply(T.welcome(name), { parse_mode: 'Markdown', ...mainMenu });
+});
 
-bot.action('menu_deposit', async (ctx) => {
+bot.command('cancel', async function(ctx) {
+  await sessionService.clearSession(ctx.from.id);
+  await ctx.scene.leave();
+  await ctx.reply('❌ Отменено', mainMenu);
+});
+
+// ─── Inline menu handlers ─────────────────────────────────────────────────
+bot.action('menu_deposit', async function(ctx) {
   await ctx.answerCbQuery();
-  var check = require('../services/rateLimit').checkRateLimit;
-  var r = await check(ctx.from.id, 'deposit');
-  if (!r.allowed) return ctx.reply(r.message);
+  var rateLimit = require('../services/rateLimit');
+  var check = await rateLimit.checkRateLimit(ctx.from.id, 'deposit');
+  if (!check.allowed) return ctx.reply(check.message);
   return ctx.scene.enter('deposit');
 });
 
-bot.action('menu_withdraw', async (ctx) => {
+bot.action('menu_withdraw', async function(ctx) {
   await ctx.answerCbQuery();
-  var check = require('../services/rateLimit').checkRateLimit;
-  var r = await check(ctx.from.id, 'withdrawal');
-  if (!r.allowed) return ctx.reply(r.message);
+  var rateLimit = require('../services/rateLimit');
+  var check = await rateLimit.checkRateLimit(ctx.from.id, 'withdrawal');
+  if (!check.allowed) return ctx.reply(check.message);
   return ctx.scene.enter('withdrawal');
 });
 
-bot.action('menu_history', async (ctx) => {
+bot.action('menu_history', async function(ctx) {
   await ctx.answerCbQuery();
   var transactions = await txnService.getUserTransactions(ctx.from.id, 5);
   if (transactions.length === 0) return ctx.reply('📜 У вас ещё нет транзакций.');
@@ -103,63 +109,50 @@ bot.action('menu_history', async (ctx) => {
   await ctx.reply('📜 Последние транзакции:\n\n' + lines.join('\n'));
 });
 
-bot.action('menu_support', async (ctx) => {
+bot.action('menu_support', async function(ctx) {
   await ctx.answerCbQuery();
   await ctx.reply('👤 Поддержка: @maximusbos\nРаботаем 24/7! 🔥');
 });
 
-bot.command('cancel', async (ctx) => {
-  await sessionService.clearSession(ctx.from.id);
-  await ctx.scene.leave();
-  await ctx.reply('❌ Отменено', Markup.keyboard([
-    [T.btn.deposit, T.btn.withdraw],
-          [T.btn.support],
-  ]).resize());
-});
-
-bot.hears(T.btn.deposit, async (ctx) => {
-  const { checkRateLimit } = require('../services/rateLimit');
-  const check = await checkRateLimit(ctx.from.id, 'deposit');
+// ─── Keep text button handlers as fallback ────────────────────────────────
+bot.hears(T.btn.deposit, async function(ctx) {
+  var rateLimit = require('../services/rateLimit');
+  var check = await rateLimit.checkRateLimit(ctx.from.id, 'deposit');
   if (!check.allowed) return ctx.reply(check.message);
   return ctx.scene.enter('deposit');
 });
 
-bot.hears(T.btn.withdraw, async (ctx) => {
-  const { checkRateLimit } = require('../services/rateLimit');
-  const check = await checkRateLimit(ctx.from.id, 'withdrawal');
+bot.hears(T.btn.withdraw, async function(ctx) {
+  var rateLimit = require('../services/rateLimit');
+  var check = await rateLimit.checkRateLimit(ctx.from.id, 'withdrawal');
   if (!check.allowed) return ctx.reply(check.message);
   return ctx.scene.enter('withdrawal');
 });
 
-bot.hears(T.btn.support, (ctx) => ctx.reply('👤 Поддержка: @maximusbos \nРаботаем 24/7! 🔥'));
+bot.hears(T.btn.support, function(ctx) { ctx.reply('👤 Поддержка: @maximusbos\nРаботаем 24/7! 🔥'); });
 
-bot.hears(T.btn.cancel, async (ctx) => {
+bot.hears(T.btn.cancel, async function(ctx) {
   await sessionService.clearSession(ctx.from.id);
   await ctx.scene.leave();
-  await ctx.reply('❌ Отменено', Markup.keyboard([
-    [T.btn.deposit, T.btn.withdraw],
-    [T.btn.history, T.btn.support],
-  ]).resize());
+  await ctx.reply('❌ Отменено', mainMenu);
 });
 
-bot.hears(T.btn.history, async (ctx) => {
-  const transactions = await txnService.getUserTransactions(ctx.from.id, 5);
+bot.hears(T.btn.history, async function(ctx) {
+  var transactions = await txnService.getUserTransactions(ctx.from.id, 5);
   if (transactions.length === 0) return ctx.reply('📜 У вас ещё нет транзакций.');
-  const statusEmoji = { pending: '⏳', processing: '🔄', completed: '✅', rejected: '❌', expired: '⏰' };
-  const typeLabel = { deposit: 'Пополнение', withdrawal: 'Вывод' };
-  const lines = transactions.map((t) =>
-    (statusEmoji[t.status] || '❓') + ' ' + typeLabel[t.type] + ' ' + t.amount + ' сом | ' +
-    (t.bookmaker ? t.bookmaker.toUpperCase() : '') + ' | ' + formatDate(t.created_at)
-  );
+  var statusEmoji = { pending: '⏳', processing: '🔄', completed: '✅', rejected: '❌', expired: '⏰' };
+  var typeLabel = { deposit: 'Пополнение', withdrawal: 'Вывод' };
+  var lines = transactions.map(function(t) {
+    return (statusEmoji[t.status] || '❓') + ' ' + typeLabel[t.type] + ' ' + t.amount + ' сом | ' + (t.bookmaker ? t.bookmaker.toUpperCase() : '') + ' | ' + formatDate(t.created_at);
+  });
   await ctx.reply('📜 Последние транзакции:\n\n' + lines.join('\n'));
 });
 
 // ─── Payment method buttons (legacy fallback) ─────────────────────────────
-const paymentLinks = {
-  pay_mbank: { name: 'MBANK', getLink: () => 'https://app.mbank.kg/qr/#00020101021132590015qr.demirbank.kg01047001101611800003896513311202111302125204482953034175909DEMIRBANK6304dcb6' },
-  'pay_odeньги': { name: 'O!Деньги', getLink: () => 'https://api.dengi.o.kg/#00020101021132590015qr.demirbank.kg01047001101611800003896513311202111302125204482953034175909DEMIRBANK6304dcb6' },
-  pay_kompanion: { name: 'kompanion', getLink: () => 'https://24.kompanion.kg/qr/#00020101021132590015qr.demirbank.kg01047001101611800003896513311202111302125204482953034175909DEMIRBANK6304dcb6' },
-  pay_bakai: { name: 'BAKAI BANK', getLink: () => 'https://bakai.app#00020101021132590015qr.demirbank.kg01047001101611800003896513311202111302125204482953034175909DEMIRBANK6304dcb6' },
+var paymentLinks = {
+  pay_mbank: { name: 'MBANK', getLink: function() { return 'https://app.mbank.kg/qr/#00020101021132590015qr.demirbank.kg01047001101611800003896513311202111302125204482953034175909DEMIRBANK6304dcb6'; } },
+  'pay_kompanion': { name: 'KOMPANION', getLink: function() { return 'https://24.kompanion.kg/qr/#00020101021132590015qr.demirbank.kg01047001101611800003896513311202111302125204482953034175909DEMIRBANK6304dcb6'; } },
+  pay_bakai: { name: 'BAKAI', getLink: function() { return 'https://bakai.app/qr/#00020101021132590015qr.demirbank.kg01047001101611800003896513311202111302125204482953034175909DEMIRBANK6304dcb6'; } },
 };
 
 Object.entries(paymentLinks).forEach(function(entry) {
@@ -167,11 +160,11 @@ Object.entries(paymentLinks).forEach(function(entry) {
   var name = entry[1].name;
   var getLink = entry[1].getLink;
 
-  bot.action(action, async (ctx) => {
+  bot.action(action, async function(ctx) {
     await ctx.answerCbQuery();
-    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    const session = await sessionService.getSession(ctx.from.id);
-    const link = getLink(session.amount, session.accountId);
+    try { await ctx.deleteMessage(); } catch (e) {}
+    var session = await sessionService.getSession(ctx.from.id);
+    var link = getLink();
 
     await sessionService.updateSession(ctx.from.id, {
       paymentMethod: name,
@@ -183,34 +176,37 @@ Object.entries(paymentLinks).forEach(function(entry) {
       formattedTotal: session.formattedTotal,
     });
 
-    const displayAmount = session.finalAmount
+    var displayAmount = session.finalAmount
       ? session.finalAmount.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
       : formatAmount(session.amount);
 
     await ctx.reply(
-      '✅ Вы выбрали: ' + name + '\n' +
-      '✅ Сумма к оплате: *' + displayAmount + '*\n' +
+      '✅ ' + name + '\n\n' +
+      '💰 Сумма к оплате: ' + displayAmount + ' сом\n\n' +
       '⚠️ Обязательно переведите точную сумму (с копейками)\n' +
       '✅ Отправьте чек об оплате в этот чат',
-      {
-        ...Markup.inlineKeyboard([
-          [Markup.button.url('💳 ОТКРЫТЬ ' + name, link)]
-        ])
-      }
+      Markup.inlineKeyboard([
+        [Markup.button.url('💳 Оплатить ' + displayAmount + ' сом', link)]
+      ])
     );
   });
 });
 
 // ─── Receipt handler ──────────────────────────────────────────────────────
-bot.on('photo', async (ctx) => {
-  const session = await sessionService.getSession(ctx.from.id);
+bot.on('photo', async function(ctx) {
+  var session = await sessionService.getSession(ctx.from.id);
   if (!session.awaitingReceipt) return;
 
-  const photo = ctx.message.photo;
-  const fileId = photo[photo.length - 1].file_id;
+  var photo = ctx.message.photo;
+  var fileId = photo[photo.length - 1].file_id;
 
   try {
-    const txn = await txnService.createDeposit({
+    // Delete payment message
+    if (session.paymentMessageId) {
+      try { await ctx.telegram.deleteMessage(ctx.from.id, session.paymentMessageId); } catch (e) {}
+    }
+
+    var txn = await txnService.createDeposit({
       telegramId: ctx.from.id,
       bookmaker: session.bookmaker,
       accountId: session.accountId,
@@ -221,16 +217,16 @@ bot.on('photo', async (ctx) => {
 
     await txnService.attachReceipt(txn.id, fileId);
 
-    const adminCaption =
+    var adminCaption =
       '🆕 НОВОЕ ПОПОЛНЕНИЕ\n\n' +
-      '👤 Пользователь: ' + (ctx.from.username ? '@' + ctx.from.username : ctx.from.first_name) + '\n' +
+      '👤 ' + (ctx.from.username ? '@' + ctx.from.username : ctx.from.first_name) + '\n' +
       '💰 Сумма: ' + formatAmount(session.finalAmount) + ' сом\n' +
       '🏦 Букмекер: ' + session.bookmaker + '\n' +
       '🆔 Аккаунт: ' + session.accountId + '\n' +
       '💳 Способ: ' + (session.paymentMethod ? session.paymentMethod.toUpperCase() : '') + '\n' +
       '📋 ID: ' + txn.id;
 
-    const adminMsg = await ctx.telegram.sendPhoto(
+    var adminMsg = await ctx.telegram.sendPhoto(
       process.env.ADMIN_CHAT_ID,
       fileId,
       {
@@ -253,12 +249,8 @@ bot.on('photo', async (ctx) => {
       '🏦 Букмекер: ' + session.bookmaker + '\n' +
       '🆔 ID: ' + session.accountId + '\n' +
       '💰 Сумма: ' + formatAmount(session.finalAmount) + ' сом\n\n' +
-      '⏳ Ожидайте подтверждения. Обычно 10 сек – 1 мин.\n' +
-      'Если возникли проблемы: @maximusbos',
-      Markup.keyboard([
-        [T.btn.deposit, T.btn.withdraw],
-        [T.btn.history, T.btn.support],
-      ]).resize()
+      '⏳ Ожидайте подтверждения. Обычно 10 сек – 1 мин.',
+      mainMenu
     );
 
     await sessionService.clearSession(ctx.from.id);
@@ -268,30 +260,24 @@ bot.on('photo', async (ctx) => {
   }
 });
 
-// ─── Check subscription button ────────────────────────────────────────────
-bot.action('check_subscription', async (ctx) => {
+// ─── Check subscription ───────────────────────────────────────────────────
+bot.action('check_subscription', async function(ctx) {
   await ctx.answerCbQuery();
-  const isSubscribed = await checkSubscription(ctx);
+  var isSubscribed = await checkSubscription(ctx);
   if (isSubscribed) {
     await ctx.editMessageText('✅ Спасибо за подписку! Теперь вы можете пользоваться ботом.');
-    const name = getUserName(ctx).replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
-    await ctx.reply(T.welcome(name), {
-      parse_mode: 'Markdown',
-      ...Markup.keyboard([
-        [T.btn.deposit, T.btn.withdraw],
-        [T.btn.history, T.btn.support],
-      ]).resize(),
-    });
+    var name = getUserName(ctx).replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
+    await ctx.reply(T.welcome(name), { parse_mode: 'Markdown', ...mainMenu });
   } else {
     await ctx.answerCbQuery('❌ Вы ещё не подписались!', { show_alert: true });
   }
 });
 
 // ─── Admin: approve ───────────────────────────────────────────────────────
-bot.action(/^approve_(.+)$/, async (ctx) => {
-  const txnId = ctx.match[1];
+bot.action(/^approve_(.+)$/, async function(ctx) {
+  var txnId = ctx.match[1];
   try {
-    const txn = await txnService.getTransaction(txnId);
+    var txn = await txnService.getTransaction(txnId);
     if (!txn) return ctx.answerCbQuery('❌ Транзакция не найдена');
     if (txn.status === 'completed') return ctx.answerCbQuery('Уже подтверждено ✅');
     if (txn.status === 'expired') return ctx.answerCbQuery('⏰ Заявка истекла');
@@ -299,40 +285,28 @@ bot.action(/^approve_(.+)$/, async (ctx) => {
     await ctx.answerCbQuery('⏳ Обрабатываем...');
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
 
-    const xbetApi = require('../services/xbetApi');
+    var xbetApi = require('../services/xbetApi');
 
-    // Check cashdesk balance
-    const balanceData = await xbetApi.getCashdeskBalance();
+    var balanceData = await xbetApi.getCashdeskBalance();
     if (balanceData && (balanceData.success || balanceData.Success)) {
-      const balance = parseFloat(balanceData.balance || balanceData.Balance || 0);
-      const needed = parseFloat(txn.final_amount || txn.amount);
+      var balance = parseFloat(balanceData.balance || balanceData.Balance || 0);
+      var needed = parseFloat(txn.final_amount || txn.amount);
       if (balance < needed) {
         return ctx.reply(
-          '❌ *Недостаточно средств на кассе!*\n\n' +
-          '💰 Баланс: *' + balance.toFixed(2) + '*\n' +
-          '💸 Нужно: *' + needed.toFixed(2) + '*\n\n' +
-          'Пополните кассу и попробуйте снова.',
-          { parse_mode: 'Markdown' }
+          '❌ Недостаточно средств на кассе!\n\nБаланс: ' + balance.toFixed(2) + '\nНужно: ' + needed.toFixed(2) + '\n\nПополните кассу и попробуйте снова.'
         );
       }
     }
 
     if (txn.type === 'deposit') {
-      const result = await xbetApi.depositToPlayer(txn.bookmaker_account_id, txn.amount);
+      var result = await xbetApi.depositToPlayer(txn.bookmaker_account_id, txn.amount);
       console.log('DEPOSIT API RESULT:', JSON.stringify(result));
 
       if (!result.success) {
         await ctx.reply(
-          '❌ Ошибка API при пополнении!\n' +
-          'Аккаунт: ' + txn.bookmaker_account_id + '\n' +
-          'Сумма: ' + txn.amount + ' сом\n' +
-          'Ошибка: ' + result.error + '\n\n' +
-          'Подтвердите вручную или отклоните:',
+          '❌ Ошибка API!\nАккаунт: ' + txn.bookmaker_account_id + '\nСумма: ' + txn.amount + ' сом\nОшибка: ' + result.error,
           Markup.inlineKeyboard([
-            [
-              Markup.button.callback('🔄 Попробовать снова', 'approve_' + txn.id),
-              Markup.button.callback('✅ Вручную', 'force_' + txn.id),
-            ],
+            [Markup.button.callback('🔄 Снова', 'approve_' + txn.id), Markup.button.callback('✅ Вручную', 'force_' + txn.id)],
             [Markup.button.callback('❌ Отклонить', 'reject_' + txn.id)],
           ])
         );
@@ -341,124 +315,69 @@ bot.action(/^approve_(.+)$/, async (ctx) => {
 
       await txnService.approveTransaction(txnId, ctx.from.id);
 
-      const originalTxn = await db.getOne('SELECT admin_note FROM transactions WHERE id = $1', [txnId]);
+      var originalTxn = await db.getOne('SELECT admin_note FROM transactions WHERE id = $1', [txnId]);
       if (originalTxn && originalTxn.admin_note) {
-        var updatedCaption =
-          '✅ ПОПОЛНЕНИЕ ПОДТВЕРЖДЕНО\n\n' +
-          '👤 ' + (ctx.from.username ? '@' + ctx.from.first_name : 'Админ') + '\n' +
-          '💰 Сумма: ' + (result.summa || txn.amount) + ' сом\n' +
-          '🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : '') + '\n' +
-          '🆔 ID: ' + txn.bookmaker_account_id + '\n\n' +
-          '✅ Подтверждено через API\n' +
-          '📋 ID: ' + txnId.substring(0, 8) + '...';
-
-        await ctx.telegram.editMessageCaption(
-          process.env.ADMIN_CHAT_ID,
-          parseInt(originalTxn.admin_note),
-          null,
-          updatedCaption,
-          { reply_markup: { inline_keyboard: [] } }
-        ).catch(function() {});
+        var caption = '✅ ПОДТВЕРЖДЕНО\n\n👤 ' + (ctx.from.username ? '@' + ctx.from.first_name : 'Админ') + '\n💰 ' + (result.summa || txn.amount) + ' сом\n🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : '') + '\n🆔 ' + txn.bookmaker_account_id;
+        await ctx.telegram.editMessageCaption(process.env.ADMIN_CHAT_ID, parseInt(originalTxn.admin_note), null, caption, { reply_markup: { inline_keyboard: [] } }).catch(function() {});
       }
 
-      await ctx.telegram.sendMessage(
-        txn.user_id,
-        '✅ Ваш счёт пополнен!\n💰 Сумма: ' + (result.summa || txn.amount) + ' сом\n🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : '') + ' ID: ' + txn.bookmaker_account_id
-      ).catch(function() {});
+      await ctx.telegram.sendMessage(txn.user_id, '✅ Ваш счёт пополнен!\n💰 ' + (result.summa || txn.amount) + ' сом\n🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : '') + ' ID: ' + txn.bookmaker_account_id, mainMenu).catch(function() {});
 
     } else if (txn.type === 'withdrawal') {
-      const result = await xbetApi.payoutFromPlayer(txn.bookmaker_account_id, txn.withdrawal_code);
-
-      if (!result.success) {
-        await ctx.reply(
-          '❌ Ошибка API при выплате!\nОшибка: ' + result.error + '\n\nПодтвердите вручную или отклоните:',
-          {
-            parse_mode: 'Markdown',
-            ...Markup.inlineKeyboard([
-              [
-                Markup.button.callback('🔄 Попробовать снова', 'approve_' + txn.id),
-                Markup.button.callback('✅ Вручную', 'force_' + txn.id),
-              ],
-              [Markup.button.callback('❌ Отклонить', 'reject_' + txn.id)],
-            ]),
-          }
+      var wResult = await xbetApi.payoutFromPlayer(txn.bookmaker_account_id, txn.withdrawal_code);
+      if (!wResult.success) {
+        await ctx.reply('❌ Ошибка выплаты: ' + wResult.error,
+          Markup.inlineKeyboard([
+            [Markup.button.callback('🔄 Снова', 'approve_' + txn.id), Markup.button.callback('✅ Вручную', 'force_' + txn.id)],
+            [Markup.button.callback('❌ Отклонить', 'reject_' + txn.id)],
+          ])
         );
         return;
       }
-
       await txnService.approveTransaction(txnId, ctx.from.id);
-
-      await ctx.telegram.sendMessage(
-        txn.user_id,
-        '✅ Выплата выполнена!\n\n💰 Сумма: *' + result.summa + ' сом*\n🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : '') + ' ID: ' + txn.bookmaker_account_id,
-        { parse_mode: 'Markdown' }
-      ).catch(function() {});
-
-      await ctx.reply(
-        '✅ *Выплата выполнена через API*\n\n🆔 ID: ' + txn.bookmaker_account_id + '\n💰 Сумма: ' + result.summa + ' сом',
-        { parse_mode: 'Markdown' }
-      );
+      await ctx.telegram.sendMessage(txn.user_id, '✅ Выплата выполнена!\n💰 ' + wResult.summa + ' сом\n🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : ''), mainMenu).catch(function() {});
+      await ctx.reply('✅ Выплата: ' + txn.bookmaker_account_id + ' | ' + wResult.summa + ' сом');
     }
   } catch (err) {
     console.error('Approve error:', err);
-    await ctx.reply('❌ Произошла ошибка. Попробуйте снова.');
+    await ctx.reply('❌ Ошибка. Попробуйте снова.');
   }
 });
 
 // ─── Force approve ────────────────────────────────────────────────────────
-bot.action(/^force_(.+)$/, async (ctx) => {
-  const txnId = ctx.match[1];
+bot.action(/^force_(.+)$/, async function(ctx) {
+  var txnId = ctx.match[1];
   try {
-    const txn = await txnService.getTransaction(txnId);
+    var txn = await txnService.getTransaction(txnId);
     if (!txn) return ctx.answerCbQuery('❌ Не найдена');
     await txnService.approveTransaction(txnId, ctx.from.id);
     await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-    await ctx.answerCbQuery('✅ Подтверждено вручную');
-    await ctx.telegram.sendMessage(txn.user_id, '✅ Ваша заявка подтверждена!\n💰 ' + txn.amount + ' сом\n🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : '')).catch(function() {});
-    await ctx.reply('✅ Подтверждено вручную\nID: ' + txnId.substring(0, 8) + '...');
-  } catch (err) {
-    console.error('Force approve error:', err);
-  }
+    await ctx.answerCbQuery('✅ Подтверждено');
+    await ctx.telegram.sendMessage(txn.user_id, '✅ Заявка подтверждена!\n💰 ' + txn.amount + ' сом\n🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : ''), mainMenu).catch(function() {});
+  } catch (err) { console.error('Force approve error:', err); }
 });
 
 // ─── Admin: reject ────────────────────────────────────────────────────────
-bot.action(/^reject_(.+)$/, async (ctx) => {
-  const txnId = ctx.match[1];
+bot.action(/^reject_(.+)$/, async function(ctx) {
+  var txnId = ctx.match[1];
   try {
-    const txn = await txnService.getTransaction(txnId);
-    if (!txn) return ctx.answerCbQuery('❌ Транзакция не найдена');
+    var txn = await txnService.getTransaction(txnId);
+    if (!txn) return ctx.answerCbQuery('❌ Не найдена');
     if (txn.status === 'rejected') return ctx.answerCbQuery('Уже отклонено');
-    if (txn.status === 'expired') return ctx.answerCbQuery('⏰ Заявка истекла');
+    if (txn.status === 'expired') return ctx.answerCbQuery('⏰ Истекло');
 
-    const savedMsgId = txn.admin_note;
+    var savedMsgId = txn.admin_note;
     await txnService.rejectTransaction(txnId, ctx.from.id, 'Отклонено администратором');
     await ctx.answerCbQuery('❌ Отклонено');
 
     if (savedMsgId && process.env.ADMIN_CHAT_ID) {
-      var rejectCaption =
-        '❌ ПОПОЛНЕНИЕ ОТКЛОНЕНО\n\n' +
-        '👤 ' + txn.user_id + '\n' +
-        '💰 Сумма: ' + txn.amount + ' сом\n' +
-        '🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : '') + '\n' +
-        '🆔 ID: ' + txn.bookmaker_account_id + '\n\n' +
-        '❌ Отклонено админом\n' +
-        '📋 ID: ' + txnId.substring(0, 8) + '...';
-
-      await ctx.telegram.editMessageCaption(
-        process.env.ADMIN_CHAT_ID,
-        parseInt(savedMsgId),
-        null,
-        rejectCaption,
-        { reply_markup: { inline_keyboard: [] } }
-      ).catch(function() {});
+      var rCaption = '❌ ОТКЛОНЕНО\n\n👤 ' + txn.user_id + '\n💰 ' + txn.amount + ' сом\n🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : '') + '\n🆔 ' + txn.bookmaker_account_id;
+      await ctx.telegram.editMessageCaption(process.env.ADMIN_CHAT_ID, parseInt(savedMsgId), null, rCaption, { reply_markup: { inline_keyboard: [] } }).catch(function() {});
     } else {
       await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(function() {});
     }
 
-    await ctx.telegram.sendMessage(
-      txn.user_id,
-      '❌ Ваша заявка отклонена.\nПричина: Отклонено администратором.\nПомощь: @big_boss_kg'
-    ).catch(function() {});
+    await ctx.telegram.sendMessage(txn.user_id, '❌ Заявка отклонена.\nПричина: Отклонено администратором.\nПомощь: @maximusbos', mainMenu).catch(function() {});
   } catch (err) {
     console.error('Reject error:', err);
     await ctx.answerCbQuery('❌ Ошибка');
@@ -466,11 +385,11 @@ bot.action(/^reject_(.+)$/, async (ctx) => {
 });
 
 // ─── SMS handler ──────────────────────────────────────────────────────────
-const smsParser = require('../services/smsParser');
+var smsParser = require('../services/smsParser');
 
-bot.on('text', async (ctx, next) => {
-  var isAdminUser = (process.env.ADMIN_IDS || '').split(',').map(function(id) { return parseInt(id.trim()); }).includes(ctx.from.id);
-  if (!isAdminUser) return next();
+bot.on('text', async function(ctx, next) {
+  var adminIds = (process.env.ADMIN_IDS || '').split(',').map(function(id) { return parseInt(id.trim()); });
+  if (!adminIds.includes(ctx.from.id)) return next();
 
   var text = ctx.message.text;
   var amount = smsParser.parseSmSAmount(text);
@@ -487,132 +406,54 @@ bot.on('text', async (ctx, next) => {
 
     var depositResult = await xbetApi.depositToPlayer(matched.bookmaker_account_id, matched.amount);
 
-    if (depositResult.success || (depositResult.fullResponse && depositResult.fullResponse.Success)) {
+    if (depositResult.success) {
       await txnService.approveTransaction(matched.id, ctx.from.id);
 
-      var originalTxn = await db.getOne('SELECT admin_note FROM transactions WHERE id = $1', [matched.id]);
-      if (originalTxn && originalTxn.admin_note && process.env.ADMIN_CHAT_ID) {
-        var safeName = (matched.username || '').replace(/[_*[\]()~`>#+\-=|{}.!]/g, '\\$&');
-        var smsCaption =
-          '✅ ПОПОЛНЕНИЕ ПОДТВЕРЖДЕНО\n\n' +
-          '👤 ' + (matched.username ? '@' + safeName : matched.full_name) + '\n' +
-          '💰 Сумма: ' + matched.amount + ' сом\n' +
-          '🏦 ' + (matched.bookmaker ? matched.bookmaker.toUpperCase() : '') + '\n' +
-          '🆔 ID: ' + matched.bookmaker_account_id + '\n\n' +
-          '⚡ Авто-пополнение через банк\n' +
-          '📋 ID: ' + matched.id.substring(0, 8) + '...';
-
-        await ctx.telegram.editMessageCaption(
-          process.env.ADMIN_CHAT_ID,
-          parseInt(originalTxn.admin_note),
-          null,
-          smsCaption,
-          { reply_markup: { inline_keyboard: [] } }
-        ).catch(function() {});
+      var origTxn = await db.getOne('SELECT admin_note FROM transactions WHERE id = $1', [matched.id]);
+      if (origTxn && origTxn.admin_note && process.env.ADMIN_CHAT_ID) {
+        var smsCaption = '✅ АВТО-ПОДТВЕРЖДЕНО\n\n👤 ' + (matched.username ? '@' + matched.username : matched.full_name) + '\n💰 ' + matched.amount + ' сом\n🏦 ' + (matched.bookmaker ? matched.bookmaker.toUpperCase() : '') + '\n🆔 ' + matched.bookmaker_account_id + '\n\n⚡ Авто через банк';
+        await ctx.telegram.editMessageCaption(process.env.ADMIN_CHAT_ID, parseInt(origTxn.admin_note), null, smsCaption, { reply_markup: { inline_keyboard: [] } }).catch(function() {});
       }
 
-      await ctx.telegram.sendMessage(
-        matched.user_id,
-        '✅ Ваш счёт пополнен автоматически!\n\n' +
-        '💰 Сумма: ' + (depositResult.summa || matched.amount) + ' сом\n' +
-        '🏦 ' + (matched.bookmaker ? matched.bookmaker.toUpperCase() : '') + ' ID: ' + matched.bookmaker_account_id + '\n\n' +
-        '⚡ Автоматическая проверка через банк'
-      ).catch(function() {});
-
-      await ctx.reply(
-        '✅ Автоматически подтверждено!\n\n' +
-        '👤 ' + (matched.username ? '@' + matched.username : matched.full_name) + '\n' +
-        '💰 ' + amount + ' сом → ' + (matched.bookmaker ? matched.bookmaker.toUpperCase() : '') + ' ID: ' + matched.bookmaker_account_id + '\n' +
-        '📋 ID: ' + matched.id.substring(0, 8) + '...'
-      );
+      await ctx.telegram.sendMessage(matched.user_id, '✅ Счёт пополнен автоматически!\n💰 ' + (depositResult.summa || matched.amount) + ' сом\n🏦 ' + (matched.bookmaker ? matched.bookmaker.toUpperCase() : '') + '\n⚡ Авто через банк', mainMenu).catch(function() {});
+      await ctx.reply('✅ Авто-подтверждено! ' + (matched.username ? '@' + matched.username : matched.full_name) + ' | ' + amount + ' сом');
     } else {
       await txnService.approveTransaction(matched.id, ctx.from.id);
-
-      if (process.env.ADMIN_CHAT_ID) {
-        await ctx.telegram.sendMessage(
-          process.env.ADMIN_CHAT_ID,
-          '✅ *Авто-подтверждено через банк*\n\n' +
-          '👤 ' + (matched.username ? '@' + matched.username : matched.full_name) + '\n' +
-          '💰 ' + amount + ' сом\n' +
-          '🏦 ' + (matched.bookmaker ? matched.bookmaker.toUpperCase() : '') + ' ID: ' + matched.bookmaker_account_id + '\n' +
-          '📋 ID: ' + matched.id.substring(0, 8) + '...',
-          { parse_mode: 'Markdown' }
-        ).catch(function() {});
-      }
-
-      await ctx.telegram.sendMessage(matched.user_id, '✅ Ваш счёт пополнен!\n💰 ' + matched.amount + ' сом\n🏦 ' + (matched.bookmaker ? matched.bookmaker.toUpperCase() : '')).catch(function() {});
-
-      await ctx.reply(
-        '✅ Оплата подтверждена банком!\n⚠️ API ошибка: ' + depositResult.error + '\n\n' +
-        '👤 ' + (matched.username ? '@' + matched.username : matched.full_name) + '\n' +
-        '💰 ' + amount + ' сом\n' +
-        '📋 ID: ' + matched.id.substring(0, 8) + '...'
-      );
+      await ctx.telegram.sendMessage(matched.user_id, '✅ Счёт пополнен!\n💰 ' + matched.amount + ' сом', mainMenu).catch(function() {});
+      await ctx.reply('✅ Банк подтвердил, но API ошибка: ' + depositResult.error + '\n' + matched.bookmaker_account_id + ' | ' + amount + ' сом');
     }
   } else {
     await smsParser.saveBankNotification(text, amount, senderName, null);
-    await ctx.reply(
-      '💳 Поступление обнаружено:\n\n💰 Сумма: ' + amount + ' сом\n👤 От: ' + (senderName || 'неизвестно') + '\n\n❌ Совпадений не найдено.\nНет ожидающих заявок на эту сумму.'
-    );
+    await ctx.reply('💳 Поступление: ' + amount + ' сом\n👤 От: ' + (senderName || '?') + '\n❌ Нет совпадений');
   }
 });
 
 // ─── Auto-expire ──────────────────────────────────────────────────────────
 setInterval(async function() {
   try {
-    var expired = await db.getMany(
-      "SELECT t.*, u.telegram_id, u.username, u.full_name FROM transactions t JOIN users u ON t.user_id = u.telegram_id WHERE t.type = 'deposit' AND t.status IN ('pending', 'processing') AND t.created_at <= NOW() - INTERVAL '10 minutes' LIMIT 10"
-    );
-
+    var expired = await db.getMany("SELECT t.*, u.telegram_id, u.username, u.full_name FROM transactions t JOIN users u ON t.user_id = u.telegram_id WHERE t.type = 'deposit' AND t.status IN ('pending', 'processing') AND t.created_at <= NOW() - INTERVAL '10 minutes' LIMIT 10");
     for (var i = 0; i < expired.length; i++) {
       var txn = expired[i];
       await db.query("UPDATE transactions SET status = 'expired', updated_at = NOW() WHERE id = $1 AND status IN ('pending', 'processing')", [txn.id]);
-
       if (txn.admin_note && process.env.ADMIN_CHAT_ID) {
-        var expCaption =
-          '⏰ ПОПОЛНЕНИЕ ИСТЕКЛО\n\n' +
-          '👤 ' + (txn.username ? '@' + txn.username : txn.full_name) + '\n' +
-          '💰 Сумма: ' + txn.amount + ' сом\n' +
-          '🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : '') + '\n' +
-          '🆔 ID: ' + txn.bookmaker_account_id + '\n\n' +
-          '⏰ Оплата не поступила (10 мин)\n' +
-          '📋 ID: ' + txn.id.substring(0, 8) + '...';
-
-        await bot.telegram.editMessageCaption(
-          process.env.ADMIN_CHAT_ID,
-          parseInt(txn.admin_note),
-          null,
-          expCaption,
-          { reply_markup: { inline_keyboard: [] } }
-        ).catch(function() {});
+        var expCaption = '⏰ ИСТЕКЛО\n\n👤 ' + (txn.username ? '@' + txn.username : txn.full_name) + '\n💰 ' + txn.amount + ' сом\n🏦 ' + (txn.bookmaker ? txn.bookmaker.toUpperCase() : '') + '\n🆔 ' + txn.bookmaker_account_id;
+        await bot.telegram.editMessageCaption(process.env.ADMIN_CHAT_ID, parseInt(txn.admin_note), null, expCaption, { reply_markup: { inline_keyboard: [] } }).catch(function() {});
       }
-
-      await bot.telegram.sendMessage(
-        txn.user_id,
-        '⏰ Ваша заявка на пополнение истекла.\n\n💰 ' + txn.amount + ' сом не было подтверждено.\nОплата не поступила в течение 10 минут.\n\nЕсли вы оплатили — обратитесь в поддержку: @maximusbos\nЕсли нет — создайте новую заявку.'
-      ).catch(function() {});
-
-      console.log('⏰ Expired transaction: ' + txn.id);
+      await bot.telegram.sendMessage(txn.user_id, '⏰ Заявка истекла.\n💰 ' + txn.amount + ' сом не подтверждено.\n\nЕсли оплатили — @maximusbos\nЕсли нет — создайте новую.', mainMenu).catch(function() {});
     }
-  } catch (err) {
-    console.error('Expiry check error:', err);
-  }
+  } catch (err) { console.error('Expiry error:', err); }
 }, 60000);
 
-// ─── Wallet payment with QR generation + deep link ────────────────────────
-bot.action(/^wallet_(\d+)$/, async (ctx) => {
+// ─── Wallet with QR generation + deep link ────────────────────────────────
+bot.action(/^wallet_(\d+)$/, async function(ctx) {
   await ctx.answerCbQuery();
-  await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+  try { await ctx.deleteMessage(); } catch (e) {}
 
   var walletId = ctx.match[1];
   var session = await sessionService.getSession(ctx.from.id);
 
   var wallet;
-  try {
-    wallet = await db.getOne('SELECT * FROM wallets WHERE id = $1', [walletId]);
-  } catch (err) {
-    console.error('Wallet fetch error:', err.message);
-  }
+  try { wallet = await db.getOne('SELECT * FROM wallets WHERE id = $1', [walletId]); } catch (err) { console.error('Wallet error:', err.message); }
 
   var walletName = wallet ? wallet.bank.toUpperCase() : 'Выбранный метод';
   var displayAmount = session.finalAmount
@@ -634,66 +475,45 @@ bot.action(/^wallet_(\d+)$/, async (ctx) => {
     odengi: 'https://api.dengi.o.kg/qr/#',
   };
 
-  // Generate QR with amount + deep link
   if (wallet && wallet.qr_data && session.finalAmount) {
     try {
       var qrGen = require('../services/qrGenerator');
-      var result = await qrGen.generateQR(wallet.qr_data, session.finalAmount);
-      var buffer = result.buffer;
-      var qrString = result.qrString;
+      var qrResult = await qrGen.generateQR(wallet.qr_data, session.finalAmount);
 
-      var bankKey = Object.keys(bankLinks).find(function(k) {
-        return wallet.bank.toLowerCase().includes(k);
-      });
+      var bankKey = Object.keys(bankLinks).find(function(k) { return wallet.bank.toLowerCase().includes(k); });
       var baseUrl = bankKey ? bankLinks[bankKey] : null;
 
       var buttons = [];
       if (baseUrl) {
-        var payUrl = baseUrl + qrString;
-        buttons.push([Markup.button.url('💳 Оплатить ' + displayAmount + ' сом', payUrl)]);
+        buttons.push([Markup.button.url('💳 Оплатить ' + displayAmount + ' сом', baseUrl + qrResult.qrString)]);
       }
 
-      var caption =
-        '✅ *' + walletName + '*\n\n' +
-        '💰 Сумма к оплате: *' + displayAmount + ' сом*\n\n' +
-        '⚠️ Обязательно переведите точную сумму (с копейками)\n' +
-        '✅ Отправьте чек об оплате в этот чат\n\n' +
-        '⏳ Осталось: 10:00';
+      var caption = '✅ ' + walletName + '\n\n💰 Сумма к оплате: ' + displayAmount + ' сом\n\n⚠️ Обязательно переведите точную сумму\n✅ Отправьте чек в этот чат\n⏳ Актуально 10 минут';
 
-      await ctx.replyWithPhoto(
-        { source: buffer, filename: 'payment_qr.png' },
-        {
-          caption: caption,
-          parse_mode: 'Markdown',
-          ...(buttons.length > 0 ? Markup.inlineKeyboard(buttons) : {}),
-        }
+      var payMsg = await ctx.replyWithPhoto(
+        { source: qrResult.buffer, filename: 'qr.png' },
+        { caption: caption, ...(buttons.length > 0 ? Markup.inlineKeyboard(buttons) : {}) }
       );
+
+      if (payMsg) {
+        await sessionService.updateSession(ctx.from.id, { paymentMessageId: payMsg.message_id });
+      }
       return;
-    } catch (err) {
-      console.error('QR generation error:', err.message);
-    }
+    } catch (err) { console.error('QR gen error:', err.message); }
   }
 
-  // Fallback: saved QR photo
-  var fallbackCaption =
-    '✅ *' + walletName + '*\n\n' +
-    '💰 Сумма к оплате: *' + displayAmount + ' сом*\n\n' +
-    '⚠️ Обязательно переведите точную сумму (с копейками)\n' +
-    '✅ Отправьте чек об оплате в этот чат\n\n' +
-    '⏳ Осталось: 10:00';
+  var fbCaption = '✅ ' + walletName + '\n\n💰 Сумма к оплате: ' + displayAmount + ' сом\n\n⚠️ Обязательно переведите точную сумму\n✅ Отправьте чек в этот чат\n⏳ Актуально 10 минут';
 
   if (wallet && wallet.qr_file_id) {
     var fbButtons = [];
-    if (wallet.qr_link) {
-      fbButtons.push([Markup.button.url('💳 Открыть ' + walletName, wallet.qr_link)]);
-    }
-    await ctx.replyWithPhoto(wallet.qr_file_id, {
-      caption: fallbackCaption,
-      parse_mode: 'Markdown',
+    if (wallet.qr_link) { fbButtons.push([Markup.button.url('💳 Открыть ' + walletName, wallet.qr_link)]); }
+    var fbMsg = await ctx.replyWithPhoto(wallet.qr_file_id, {
+      caption: fbCaption,
       ...(fbButtons.length > 0 ? Markup.inlineKeyboard(fbButtons) : {}),
     });
+    if (fbMsg) { await sessionService.updateSession(ctx.from.id, { paymentMessageId: fbMsg.message_id }); }
   } else {
-    await ctx.reply(fallbackCaption, { parse_mode: 'Markdown', ...cancelKeyboard });
+    await ctx.reply(fbCaption, cancelKeyboard);
   }
 });
 
